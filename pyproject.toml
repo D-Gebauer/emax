@@ -1,0 +1,26 @@
+[project]
+name = "emax"
+version = "0.1.0"
+authors = [
+  { name="David Gebauer", email="git@gebauer.ai" },
+]
+description = "A simple jax based implementation of emulators"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "numpy>=1.20",
+    "matplotlib>=3.5",
+    "tqdm>=4.60",
+    "jax>=0.4.37",
+    "flax>=0.10",
+    "orbax-checkpoint>=0.10",
+    "optax>=0.2",
+
+]
+
+[project.urls]
+"Homepage" = "https://github.com/D-Gebauer/emax"
+
