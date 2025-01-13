@@ -20,9 +20,9 @@ where ```hidden_shape``` is a list with the number of neurons per layer and ```r
 
 Training data (with shape ```(n_samples, n_params)``` and ```(n_samples, n_features)``` for x and y, respectively) is then loaded with:
 
-    model.load_data(x, y, batch_size=512, val_split=0.1, normalize=False)
+    model.load_data(x, y, batch_size=512, val_split=0.1, standardize=False)
 
-At this step a neural network with input and output dimension matching the training data is automatically created. The argument ```normalize``` automatically rescales ```(x,y) -> ((x-x.mean(axis=0))/x.std(axis=0), (y-y.mean(axis=0))/y.std(axis=0))``` for training.
+At this step a neural network with input and output dimension matching the training data is automatically created. The argument ```standardize``` automatically rescales ```(x,y) -> ((x-x.mean(axis=0))/x.std(axis=0), (y-y.mean(axis=0))/y.std(axis=0))``` for training.
 
 The model is then trained with:
 
@@ -34,7 +34,7 @@ Predictions are obtained with:
 
     model(x_test)
 
-In case ```normalize=True``` ```x_test``` will automatically be rescaled, and the predictions will be transformed back to the original range. 
+In case ```standardize=True``` ```x_test``` will automatically be rescaled, and the predictions will be transformed back to the original range. 
 
 ## Contact
 For any questions or feedback, please contact me at git[at]gebauer.ai.
