@@ -74,10 +74,22 @@ class Emulator(nnx.Module):
             batch_indices = indices[i:i+self.batch_size]
             yield x[batch_indices], y[batch_indices]
     
-    def load_data(self, x: jnp.ndarray, y: jnp.ndarray, batch_size : int=512, val_split : float=0.1):
+    def load_data(self, x: jnp.ndarray, y: jnp.ndarray, batch_size : int=512, val_split : float=0.1, standardize: bool=False):
         self.x = x
         self.y = y
         self.batch_size = batch_size
+        
+        self.standardize = standardize
+        
+        if standardize:
+            self.x_mean = jnp.mean(x, axis=0)
+            self.x_std = jnp.std(x, axis=0)
+            self.y_mean = jnp.mean(y, axis=0)
+            self.y_std = jnp.std(y, axis=0)
+            
+            self.x = (x - self.x_mean) / self.x_std
+            self.y = (y - self.y_mean) / self.y_std
+        
         
         val_inds = np.random.choice(x.shape[0], int(x.shape[0]*val_split), replace=False)
         self.x_val = x[val_inds]
@@ -103,7 +115,12 @@ class Emulator(nnx.Module):
         
         assert self.data_loaded, "No data loaded. Use load_data() first"
         
-        return self.mlp.__call__(x)
+        if not self.standardize:
+            return self.mlp.__call__(x)
+        
+        
+        x = (x - self.x_mean) / self.x_std
+        return self.mlp.__call__(x) * self.y_std + self.y_mean
     
 
     def train_epoch(self, optimizer: nnx.Optimizer, epoch: int) -> (float, float):
