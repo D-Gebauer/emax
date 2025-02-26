@@ -3,9 +3,7 @@ import numpy as np
 import os
 from tqdm import tqdm
 from functools import partial
-
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="False"
-
+import time 
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -117,7 +115,7 @@ class Emulator(nnx.Module):
             batch_indices = indices[i:i+self.batch_size]
             yield x[batch_indices], y[batch_indices]
     
-    def load_data(self, x: jnp.ndarray, y: jnp.ndarray, batch_size : int=512, val_split : float=0.1, standardize: bool=False, normalize: bool=False):
+    def load_data(self, x: jnp.ndarray, y: jnp.ndarray, batch_size : int=512, val_split : float=0.1, val_inds: jnp.ndarray=None, standardize: bool=False, normalize: bool=False):
         self.x = x
         self.y = y
         self.batch_size = batch_size
@@ -145,7 +143,14 @@ class Emulator(nnx.Module):
             self.x = (x - self.x_min) / (self.x_max - self.x_min)
             self.y = (y - self.y_min) / (self.y_max - self.y_min)
         
-        val_inds = np.random.choice(x.shape[0], int(x.shape[0]*val_split), replace=False)
+        
+        if val_inds is not None:
+            assert val_inds.shape[0] > 0, "val_inds must be a non-empty array"
+        if val_inds is None:
+            val_inds = np.random.choice(x.shape[0], int(x.shape[0]*val_split), replace=False)
+        elif val_split != 0.1:
+            print("val_inds provided. Ignoring val_split")
+        
         self.x_val = self.x[val_inds]
         self.y_val = self.y[val_inds]
         self.x_train = np.delete(self.x, val_inds, axis=0)
@@ -202,7 +207,7 @@ class Emulator(nnx.Module):
         optimizer = nnx.Optimizer(self.mlp, optax.nadam(lr, momentum, nesterov=nesterov))
 
         cpath = os.getcwd()
-        self.ckpt_dir = os.path.join(cpath, '.ckpt/')
+        self.ckpt_dir = os.path.join(cpath, f'.ckpt_{time.time()}/')
         
         if not os.path.exists(self.ckpt_dir):
             os.makedirs(self.ckpt_dir)
@@ -253,7 +258,8 @@ class Emulator(nnx.Module):
                 state_restored = checkpointer.restore(self.ckpt_dir / f'state_{best_val_loss_epoch}', old_state)
                 self.mlp = nnx.merge(graphdef, state_restored)
                 
-                print(f"\n Decreasing learning rate to {(lr*jnp.sqrt(0.1)**lr_decrease_step):.3e}\n")
+                if verbose:
+                    print(f"\n Decreasing learning rate to {(lr*jnp.sqrt(0.1)**lr_decrease_step):.3e}\n")
             
             
             if epoch - best_val_loss_epoch > stop_after_epochs:
@@ -262,7 +268,8 @@ class Emulator(nnx.Module):
                 state_restored = checkpointer.restore(self.ckpt_dir / f'state_{best_val_loss_epoch}', old_state)
                 self.mlp = nnx.merge(graphdef, state_restored)
                 
-                print(f"\n Early stopping. Best Val Loss: {best_val_loss:.2e} at epoch {best_val_loss_epoch+1}")
+                if verbose:
+                    print(f"\n Early stopping. Best Val Loss: {best_val_loss:.2e} at epoch {best_val_loss_epoch+1}")
                 break
             
             if epoch == max_epochs-1:
