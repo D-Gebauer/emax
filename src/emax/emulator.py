@@ -24,7 +24,9 @@ class MLP(nnx.Module):
        
         #check whether activation_function is string or list of strings or function:
         
+        
         if isinstance(activation_function, str):
+            
             if activation_function == 'leaky_relu':
                 activation_function = nnx.leaky_relu
             elif activation_function == 'relu':
@@ -35,11 +37,15 @@ class MLP(nnx.Module):
                 activation_function = nnx.tanh
             else:
                 raise ValueError("Activation function not recognized. Use 'leaky_relu', 'relu', 'sigmoid' or 'tanh'")
-            self.activation_functions = [activation_function] * (len(hidden_shape)-1)
+            
+            self.activation_functions = [activation_function] * len(hidden_shape)
+        
         elif callable(activation_function):
-            activation_function = [activation_function] * (len(hidden_shape)-1)
+            self.activation_functions = [activation_function] * len(hidden_shape)
+        
         elif isinstance(activation_function, list):
-            assert len(activation_function) == len(hidden_shape)-1, "Length of activation function list must be equal to number of hidden layers"
+            assert len(activation_function) == len(hidden_shape), "Length of activation function list must be equal to number of hidden layers"
+            
             for i in range(len(activation_function)):
                 if isinstance(activation_function[i], str):
                     if activation_function[i] == 'leaky_relu':
@@ -52,10 +58,10 @@ class MLP(nnx.Module):
                         activation_function[i] = nnx.tanh
                     else:
                         raise ValueError("Activation function not recognized. Use 'leaky_relu', 'relu', 'sigmoid' or 'tanh'")
+                
                 elif not callable(activation_function[i]):
                     raise ValueError("Activation function not recognized. Use 'leaky_relu', 'relu', 'sigmoid' or 'tanh'")
             self.activation_functions = activation_function
-        
         
         assert len(hidden_shape) > 0, "hidden_shape must be a list of at least one integer"
         
@@ -63,6 +69,7 @@ class MLP(nnx.Module):
         for i in range(len(hidden_shape)-1):
             self.layers.append(nnx.Linear(hidden_shape[i], hidden_shape[i+1], rngs=rngs))        
         self.layers.append(nnx.Linear(hidden_shape[-1], out_dim, rngs=rngs))
+        
         
     def __call__(self, x):
         
@@ -174,17 +181,21 @@ class Emulator(nnx.Module):
         
     
 
-    def train_epoch(self, optimizer: nnx.Optimizer, epoch: int) -> (float, float):
+    def train_epoch(self, optimizer: nnx.Optimizer, epoch: int, verbose: bool=True) -> (float, float):
         train_loss = []
-        for step, batch in tqdm(enumerate(self.data_stream(self.x_train, self.y_train)), total=self.n_batches_train, desc=f"Training epoch {epoch+1:03d}", leave=True, ):
-            train_loss.append(__train_step__(self.mlp, optimizer, *batch))
-
+        if verbose:
+            for step, batch in tqdm(enumerate(self.data_stream(self.x_train, self.y_train)), total=self.n_batches_train, desc=f"Training epoch {epoch+1:03d}", leave=True, ):
+                train_loss.append(__train_step__(self.mlp, optimizer, *batch))
+        else:
+            for step, batch in enumerate(self.data_stream(self.x_train, self.y_train)):
+                train_loss.append(__train_step__(self.mlp, optimizer, *batch))
+        
         # Compute the metrics on the test set after each training epoch.
         val_loss = __eval_step__(self.mlp, self.x_val, self.y_val)
         
         return jnp.mean(jnp.array(train_loss)), val_loss
 
-    def train(self, lr: float, max_epochs: int, patience: int=5, stop_after_epochs: int=20, momentum: float=0.9, nesterov: bool=True):
+    def train(self, lr: float, max_epochs: int, patience: int=5, stop_after_epochs: int=20, momentum: float=0.9, nesterov: bool=True, verbose: bool=True):
         
         momentum = 0.9
 
@@ -211,12 +222,13 @@ class Emulator(nnx.Module):
 
         for epoch in range(max_epochs):
             
-            train_loss, val_loss = self.train_epoch(optimizer, epoch)
+            train_loss, val_loss = self.train_epoch(optimizer, epoch, verbose)
             
             self.metrics_history['train_loss'].append(train_loss)
             self.metrics_history['val_loss'].append(val_loss)
             
-            print(f"Epoch {epoch+1:03d}/{max_epochs} -- train loss: {self.metrics_history['train_loss'][-1]:.2e} -- val loss: {self.metrics_history['val_loss'][-1]:.2e}\n")
+            if verbose:
+                print(f"Epoch {epoch+1:03d}/{max_epochs} -- train loss: {self.metrics_history['train_loss'][-1]:.2e} -- val loss: {self.metrics_history['val_loss'][-1]:.2e}\n")
             
             if jnp.isnan(jnp.array([val_loss, train_loss])).any():
                 print("\n NaN detected. Exiting.")
@@ -250,7 +262,7 @@ class Emulator(nnx.Module):
                 state_restored = checkpointer.restore(self.ckpt_dir / f'state_{best_val_loss_epoch}', old_state)
                 self.mlp = nnx.merge(graphdef, state_restored)
                 
-                print("\n Early stopping.")
+                print(f"\n Early stopping. Best Val Loss: {best_val_loss:.2e} at epoch {best_val_loss_epoch+1}")
                 break
             
             if epoch == max_epochs-1:
