@@ -20,8 +20,43 @@ print("JAX running on", jax.devices()[0].platform.upper())
 
 class MLP(nnx.Module):
     
-    def __init__(self, in_dim: int, out_dim: int, hidden_shape: jnp.ndarray, rngs: nnx.Rngs):
+    def __init__(self, in_dim: int, out_dim: int, hidden_shape: jnp.ndarray, rngs: nnx.Rngs, activation_function: str='leaky_relu'):
        
+        #check whether activation_function is string or list of strings or function:
+        
+        if isinstance(activation_function, str):
+            if activation_function == 'leaky_relu':
+                activation_function = nnx.leaky_relu
+            elif activation_function == 'relu':
+                activation_function = nnx.relu
+            elif activation_function == 'sigmoid':
+                activation_function = nnx.sigmoid
+            elif activation_function == 'tanh':
+                activation_function = nnx.tanh
+            else:
+                raise ValueError("Activation function not recognized. Use 'leaky_relu', 'relu', 'sigmoid' or 'tanh'")
+            self.activation_functions = [activation_function] * (len(hidden_shape)-1)
+        elif callable(activation_function):
+            activation_function = [activation_function] * (len(hidden_shape)-1)
+        elif isinstance(activation_function, list):
+            assert len(activation_function) == len(hidden_shape)-1, "Length of activation function list must be equal to number of hidden layers"
+            for i in range(len(activation_function)):
+                if isinstance(activation_function[i], str):
+                    if activation_function[i] == 'leaky_relu':
+                        activation_function[i] = nnx.leaky_relu
+                    elif activation_function[i] == 'relu':
+                        activation_function[i] = nnx.relu
+                    elif activation_function[i] == 'sigmoid':
+                        activation_function[i] = nnx.sigmoid
+                    elif activation_function[i] == 'tanh':
+                        activation_function[i] = nnx.tanh
+                    else:
+                        raise ValueError("Activation function not recognized. Use 'leaky_relu', 'relu', 'sigmoid' or 'tanh'")
+                elif not callable(activation_function[i]):
+                    raise ValueError("Activation function not recognized. Use 'leaky_relu', 'relu', 'sigmoid' or 'tanh'")
+            self.activation_functions = activation_function
+        
+        
         assert len(hidden_shape) > 0, "hidden_shape must be a list of at least one integer"
         
         self.layers = [nnx.Linear(in_dim, hidden_shape[0], rngs=rngs)]
@@ -31,8 +66,8 @@ class MLP(nnx.Module):
         
     def __call__(self, x):
         
-        for sublayer in self.layers[:-1]:
-            x = nnx.leaky_relu(sublayer(x))
+        for f, sublayer in zip(self.activation_functions, self.layers[:-1]):
+            x = f(sublayer(x))
         
         return self.layers[-1](x)
 
@@ -58,13 +93,14 @@ def __eval_step__(model: MLP, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
 
 class Emulator(nnx.Module):
 
-    def __init__(self, hidden_shape: jnp.ndarray, rngs: nnx.Rngs):
+    def __init__(self, hidden_shape: jnp.ndarray, rngs: nnx.Rngs, activation_function: str='leaky_relu'):
         
         self.data_loaded = False
         self.trained = False
         self.rng = rngs
         self.hidden_shape = hidden_shape
-    
+        self.activation_function = activation_function
+        
     def data_stream(self, x: jnp.ndarray, y: jnp.ndarray):
         assert x.shape[0] == y.shape[0]
         n = x.shape[0]
@@ -74,12 +110,15 @@ class Emulator(nnx.Module):
             batch_indices = indices[i:i+self.batch_size]
             yield x[batch_indices], y[batch_indices]
     
-    def load_data(self, x: jnp.ndarray, y: jnp.ndarray, batch_size : int=512, val_split : float=0.1, standardize: bool=False):
+    def load_data(self, x: jnp.ndarray, y: jnp.ndarray, batch_size : int=512, val_split : float=0.1, standardize: bool=False, normalize: bool=False):
         self.x = x
         self.y = y
         self.batch_size = batch_size
         
         self.standardize = standardize
+        self.normalize = normalize
+        
+        assert not (standardize and normalize), "Choose either standardize or normalize"
         
         if standardize:
             self.x_mean = jnp.mean(x, axis=0)
@@ -90,12 +129,20 @@ class Emulator(nnx.Module):
             self.x = (x - self.x_mean) / self.x_std
             self.y = (y - self.y_mean) / self.y_std
         
+        if normalize:
+            self.x_max = jnp.max(x, axis=0)
+            self.x_min = jnp.min(x, axis=0)
+            self.y_max = jnp.max(y, axis=0)
+            self.y_min = jnp.min(y, axis=0)
+            
+            self.x = (x - self.x_min) / (self.x_max - self.x_min)
+            self.y = (y - self.y_min) / (self.y_max - self.y_min)
         
         val_inds = np.random.choice(x.shape[0], int(x.shape[0]*val_split), replace=False)
-        self.x_val = x[val_inds]
-        self.y_val = y[val_inds]
-        self.x_train = np.delete(x, val_inds, axis=0)
-        self.y_train = np.delete(y, val_inds, axis=0)
+        self.x_val = self.x[val_inds]
+        self.y_val = self.y[val_inds]
+        self.x_train = np.delete(self.x, val_inds, axis=0)
+        self.y_train = np.delete(self.y, val_inds, axis=0)
         
         self.n_batches_train = self.x_train.shape[0] // batch_size
         self.n_batches_val = self.x_val.shape[0] // batch_size
@@ -109,18 +156,22 @@ class Emulator(nnx.Module):
         self.in_dim = x.shape[1]
         self.out_dim = y.shape[1]
     
-        self.mlp = MLP(self.in_dim, self.out_dim, self.hidden_shape, self.rng)
+        self.mlp = MLP(self.in_dim, self.out_dim, self.hidden_shape, self.rng, self.activation_function)
         
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         
         assert self.data_loaded, "No data loaded. Use load_data() first"
         
-        if not self.standardize:
-            return self.mlp.__call__(x)
+        if self.standardize:
+            x = (x - self.x_mean) / self.x_std
+            return self.mlp.__call__(x) * self.y_std + self.y_mean
         
+        if self.normalize:
+            x = (x - self.x_min) / (self.x_max - self.x_min)
+            return self.mlp.__call__(x) * (self.y_max - self.y_min) + self.y_min
         
-        x = (x - self.x_mean) / self.x_std
-        return self.mlp.__call__(x) * self.y_std + self.y_mean
+        return self.mlp.__call__(x)
+        
     
 
     def train_epoch(self, optimizer: nnx.Optimizer, epoch: int) -> (float, float):
@@ -133,11 +184,11 @@ class Emulator(nnx.Module):
         
         return jnp.mean(jnp.array(train_loss)), val_loss
 
-    def train(self, lr: float, max_epochs: int):
+    def train(self, lr: float, max_epochs: int, patience: int=5, stop_after_epochs: int=20, momentum: float=0.9, nesterov: bool=True):
         
         momentum = 0.9
 
-        optimizer = nnx.Optimizer(self.mlp, optax.nadam(lr, momentum, nesterov=True))
+        optimizer = nnx.Optimizer(self.mlp, optax.nadam(lr, momentum, nesterov=nesterov))
 
         cpath = os.getcwd()
         self.ckpt_dir = os.path.join(cpath, '.ckpt/')
@@ -180,7 +231,7 @@ class Emulator(nnx.Module):
                 checkpointer.save(self.ckpt_dir / f'state_{epoch}', state)
             
             
-            if epoch - best_val_loss_epoch > 5 and epoch - epoch_lr_decreased > 5:
+            if epoch - best_val_loss_epoch > patience and epoch - epoch_lr_decreased > patience:
                 
                 lr_decrease_step += 1
                 epoch_lr_decreased = epoch
@@ -193,7 +244,7 @@ class Emulator(nnx.Module):
                 print(f"\n Decreasing learning rate to {(lr*jnp.sqrt(0.1)**lr_decrease_step):.3e}\n")
             
             
-            if epoch - best_val_loss_epoch > 20:
+            if epoch - best_val_loss_epoch > stop_after_epochs:
                 
                 graphdef, old_state = nnx.split(self.mlp)
                 state_restored = checkpointer.restore(self.ckpt_dir / f'state_{best_val_loss_epoch}', old_state)
