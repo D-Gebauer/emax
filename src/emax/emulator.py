@@ -280,3 +280,6 @@ class Emulator(nnx.Module):
                 
                 print("\n Maximum number of epochs reached.")
                 break
+        
+        # remove checkpoint directory
+        os.rmdir(self.ckpt_dir)
