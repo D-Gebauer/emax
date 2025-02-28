@@ -82,29 +82,30 @@ class MLP(nnx.Module):
 def mse_loss(model: MLP, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray: 
     return jnp.mean((model(x) - y) ** 2)
 
-@nnx.jit
-def __train_step__(model: MLP, optimizer: nnx.Optimizer, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray: 
+@partial(nnx.jit, static_argnames=('loss_fn'))
+def __train_step__(model: MLP, optimizer: nnx.Optimizer, x: jnp.ndarray, y: jnp.ndarray, loss_fn: nnx.Module) -> jnp.ndarray:
 
-    grad_fn = nnx.value_and_grad(mse_loss)
+    grad_fn = nnx.value_and_grad(loss_fn)
     loss, grads = grad_fn(model, x, y)
-    optimizer.update(grads) # update weights in place
+    optimizer.update(grads)
 
     return loss
 
-@nnx.jit
-def __eval_step__(model: MLP, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:  
-    return mse_loss(model, x, y)
+@partial(nnx.jit, static_argnames=('loss_fn'))
+def __eval_step__(model: MLP, x: jnp.ndarray, y: jnp.ndarray, loss_fn: nnx.module) -> jnp.ndarray:  
+    return loss_fn(model, x, y)
 
 
 class Emulator(nnx.Module):
 
-    def __init__(self, hidden_shape: jnp.ndarray, rngs: nnx.Rngs, activation_function: str='leaky_relu'):
+    def __init__(self, hidden_shape: jnp.ndarray, rngs: nnx.Rngs, activation_function: str='leaky_relu', loss_fn: nnx.Module=mse_loss):
         
         self.data_loaded = False
         self.trained = False
         self.rng = rngs
         self.hidden_shape = hidden_shape
         self.activation_function = activation_function
+        self.loss_fn = loss_fn
         
     def data_stream(self, x: jnp.ndarray, y: jnp.ndarray):
         assert x.shape[0] == y.shape[0]
@@ -190,13 +191,13 @@ class Emulator(nnx.Module):
         train_loss = []
         if verbose:
             for step, batch in tqdm(enumerate(self.data_stream(self.x_train, self.y_train)), total=self.n_batches_train, desc=f"Training epoch {epoch+1:03d}", leave=True, ):
-                train_loss.append(__train_step__(self.mlp, optimizer, *batch))
+                train_loss.append(__train_step__(self.mlp, optimizer, *batch, loss_fn=self.loss_fn))
         else:
             for step, batch in enumerate(self.data_stream(self.x_train, self.y_train)):
-                train_loss.append(__train_step__(self.mlp, optimizer, *batch))
+                train_loss.append(__train_step__(self.mlp, optimizer, *batch, loss_fn=self.loss_fn))
         
         # Compute the metrics on the test set after each training epoch.
-        val_loss = __eval_step__(self.mlp, self.x_val, self.y_val)
+        val_loss = __eval_step__(self.mlp, self.x_val, self.y_val, self.loss_fn)
         
         return jnp.mean(jnp.array(train_loss)), val_loss
 
@@ -280,6 +281,3 @@ class Emulator(nnx.Module):
                 
                 print("\n Maximum number of epochs reached.")
                 break
-        
-        # remove checkpoint directory
-        os.rmdir(self.ckpt_dir)
